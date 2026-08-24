@@ -80,7 +80,7 @@ function readState(): MonitorState {
 
 function normalizeState(state: MonitorState): MonitorState {
 	for (const [itemId, item] of Object.entries(state.items)) {
-		if (isLegacyQueuedItemId(itemId) || isStaleLiveQueuedItem(item)) delete state.items[itemId];
+		if (isLegacyQueuedItemId(itemId) || isStaleLiveQueuedItem(item) || isLegacyBlockedToolItem(item)) delete state.items[itemId];
 	}
 	return state;
 }
@@ -91,6 +91,10 @@ function isLegacyQueuedItemId(itemId: string): boolean {
 
 function isStaleLiveQueuedItem(item: MonitorItem): boolean {
 	return item.status === "queued" && item.id.endsWith(":queued") && Date.now() - item.updatedAt > LIVE_QUEUED_TTL_MS;
+}
+
+function isLegacyBlockedToolItem(item: MonitorItem): boolean {
+	return item.status === "blocked" && (item.kind === "tool" || item.kind === "bash");
 }
 
 function writeState(state: MonitorState): void {
@@ -368,8 +372,8 @@ function boardItemKey(item: MonitorItem): string {
 function shouldHideBoardItem(item: MonitorItem): boolean {
 	if (item.kind === "bash") return true;
 	if (item.kind === "agent" && item.id.endsWith(":agent")) return true;
+	if (item.kind === "tool") return true;
 	if (item.status === "queued" && !isCurrentQueuedItem(item)) return true;
-	if (item.status === "completed" && item.kind === "tool") return true;
 	return false;
 }
 
@@ -903,11 +907,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_execution_end", async (event, ctx) => {
 		const identity = getSessionIdentity(ctx);
 		const itemId = `${identity.sessionId}:tool:${event.toolCallId}`;
-		if (event.isError) {
-			blockItem(identity, itemId, "Tool ended with an error");
-			return;
-		}
-		completeItem(identity, itemId, "Tool completed");
+		completeItem(identity, itemId, event.isError ? "Tool ended with an error" : "Tool completed");
 	});
 
 	pi.on("after_provider_response", async (event, ctx) => {
