@@ -62,6 +62,6 @@
     <text x="0" y="0" class="mono header" fill="#f8fafc">Details</text>
     <text x="0" y="34" class="mono item">status: in_progress  age: 2s</text>
     <text x="0" y="64" class="mono item">summary Agent turn is processing a prompt and tracking active tools across pi sessions.</text>
-    <text x="0" y="94" class="mono item muted">cwd /Users/example/project • last tool edit</text>
+    <text x="0" y="94" class="mono item muted">cwd /Users/example/project • resume pi --session abc123</text>
   </g>
 </svg>

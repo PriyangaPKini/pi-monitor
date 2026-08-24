@@ -31,6 +31,8 @@ Controls:
 
 - Stores monitor state under `~/.pi/agent/monitor/`.
 - Reads recent pi session files from `~/.pi/agent/sessions/`.
+- Hides bash items from the board.
+- Shows likely "needs input" sessions under **Blocked** when session text indicates confirmation, permission, or user input is needed.
 - Intended for interactive TUI mode.
 
 ## License
