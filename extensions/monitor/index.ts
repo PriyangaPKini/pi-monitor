@@ -12,6 +12,7 @@ const REFRESH_MS = 1000;
 const SESSION_ROOT = join(homedir(), ".pi", "agent", "sessions");
 const MAX_SESSION_FILES = 200;
 const BOARD_WINDOW_MS = 48 * 60 * 60 * 1000;
+const LIVE_SESSION_PREFIX = "live-session:";
 
 type MonitorStatus = "queued" | "in_progress" | "blocked" | "completed";
 type MonitorKind = "session" | "agent" | "tool" | "bash" | "subagent" | "background";
@@ -192,9 +193,11 @@ function upsertItem(identity: SessionIdentity, item: Omit<MonitorItem, "sessionI
 			updatedAt: now,
 			state: "active",
 		};
+		const existingItem = state.items[item.id];
 		state.items[item.id] = {
-			...state.items[item.id],
+			...existingItem,
 			...item,
+			startedAt: existingItem?.startedAt ?? item.startedAt,
 			sessionId: identity.sessionId,
 			sessionFile: identity.sessionFile,
 			cwd: identity.cwd,
@@ -238,6 +241,32 @@ function blockItem(identity: SessionIdentity, itemId: string, details?: string):
 	});
 }
 
+function liveSessionItemId(identity: SessionIdentity): string {
+	return `${LIVE_SESSION_PREFIX}${identity.sessionId}`;
+}
+
+function upsertLiveSessionItem(identity: SessionIdentity, item: Pick<MonitorItem, "title" | "status" | "details">): void {
+	upsertItem(identity, {
+		id: liveSessionItemId(identity),
+		kind: "session",
+		startedAt: Date.now(),
+		...item,
+	});
+}
+
+function inferLiveSessionStatus(messages: unknown): MonitorStatus {
+	const text = textFromMessages(messages).toLowerCase();
+	return textNeedsInput(text) ? "blocked" : "completed";
+}
+
+function textFromMessages(messages: unknown): string {
+	if (!Array.isArray(messages)) return "";
+	return messages
+		.map((message: any) => textFromInput(message?.content ?? message?.message?.content))
+		.join(" ")
+		.trim();
+}
+
 function textFromInput(text: unknown): string {
 	if (typeof text === "string") return text.trim();
 	if (Array.isArray(text)) {
@@ -267,8 +296,11 @@ function statusColumns(state: MonitorState, extraItems: MonitorItem[] = []): Rec
 		completed: [],
 	};
 
-	const items = extraItems.length > 0 ? extraItems : Object.values(state.items);
-	for (const item of items) {
+	const itemsByKey = new Map<string, MonitorItem>();
+	for (const item of extraItems) itemsByKey.set(boardItemKey(item), item);
+	for (const item of Object.values(state.items)) itemsByKey.set(boardItemKey(item), item);
+
+	for (const item of itemsByKey.values()) {
 		if (shouldHideBoardItem(item)) continue;
 		columns[item.status].push(item);
 	}
@@ -279,8 +311,14 @@ function statusColumns(state: MonitorState, extraItems: MonitorItem[] = []): Rec
 	return columns;
 }
 
+function boardItemKey(item: MonitorItem): string {
+	if (item.kind === "session") return `session:${item.sessionFile ?? item.sessionId}`;
+	return item.id;
+}
+
 function shouldHideBoardItem(item: MonitorItem): boolean {
 	if (item.kind === "bash") return true;
+	if (item.kind === "agent" && item.id.endsWith(":agent")) return true;
 	if (item.status === "completed" && item.kind === "tool") return true;
 	return false;
 }
@@ -429,14 +467,16 @@ function readFirstLine(path: string): string {
 function inferPiSessionStatus(summary: PiSessionSummary): MonitorStatus {
 	const text = `${summary.lastAssistantText ?? ""} ${summary.lastUserPrompt ?? ""}`.toLowerCase();
 	if (/queued|pending|next turn/.test(text)) return "queued";
-	if (/awaiting user|waiting for user|waiting on user|seeking input|ask(?:ing)? for input|please enter|please provide|what should i use|needs input|need your input|let me know|please confirm|confirm\b|permission required|needs attention/.test(text)) {
-		return "blocked";
-	}
+	if (textNeedsInput(text)) return "blocked";
 	if (/running|launched|started|in progress|background|detached|monitoring|mid.flight|will report|once .* finishes|poll|screening|experiment/.test(text)) {
 		return "in_progress";
 	}
 	if (summary.lastMessageRole === "toolResult") return "in_progress";
 	return "completed";
+}
+
+function textNeedsInput(text: string): boolean {
+	return /awaiting user|waiting for user|waiting on user|seeking input|ask(?:ing)? for input|please enter|please provide|what should i use|needs input|need your input|let me know|please confirm|confirm\b|permission required|needs attention/.test(text);
 }
 
 function formatPiSessionTitle(summary: PiSessionSummary): string {
@@ -697,9 +737,14 @@ export default function (pi: ExtensionAPI) {
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
 
 	pi.on("session_start", async (_event, ctx) => {
-		ensureCurrentSessionName(pi, ctx);
+		const sessionName = ensureCurrentSessionName(pi, ctx);
 		const identity = getSessionIdentity(ctx);
 		upsertSession(identity);
+		upsertLiveSessionItem(identity, {
+			title: sessionName,
+			status: "completed",
+			details: "Pi session is idle and ready for input",
+		});
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = setInterval(() => upsertSession(identity), 5000);
 	});
@@ -711,7 +756,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = undefined;
-		upsertSession(getSessionIdentity(ctx), "shutdown");
+		const identity = getSessionIdentity(ctx);
+		upsertSession(identity, "shutdown");
+		upsertLiveSessionItem(identity, {
+			title: pi.getSessionName?.() || generateSessionName(ctx),
+			status: "completed",
+			details: "Pi session shut down",
+		});
 	});
 
 	pi.on("input", async (event, ctx) => {
@@ -730,6 +781,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		const identity = getSessionIdentity(ctx);
+		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		upsertLiveSessionItem(identity, {
+			title,
+			status: "in_progress",
+			details: "Pi agent is processing a prompt",
+		});
 		upsertItem(identity, {
 			id: `${identity.sessionId}:agent`,
 			kind: "agent",
@@ -740,8 +797,15 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_end", async (event, ctx) => {
 		const identity = getSessionIdentity(ctx);
+		const status = inferLiveSessionStatus(event.messages);
+		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		upsertLiveSessionItem(identity, {
+			title,
+			status,
+			details: status === "blocked" ? "Pi agent is waiting for user input" : "Pi agent turn completed",
+		});
 		completeItem(identity, `${identity.sessionId}:agent`, "Agent turn completed");
 	});
 
@@ -783,6 +847,11 @@ export default function (pi: ExtensionAPI) {
 	pi.on("after_provider_response", async (event, ctx) => {
 		if (event.status !== 429 && event.status < 500) return;
 		const identity = getSessionIdentity(ctx);
+		upsertLiveSessionItem(identity, {
+			title: pi.getSessionName?.() || generateSessionName(ctx),
+			status: "blocked",
+			details: `Provider response ${event.status}`,
+		});
 		blockItem(identity, `${identity.sessionId}:agent`, `Provider response ${event.status}`);
 	});
 
