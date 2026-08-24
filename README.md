@@ -23,7 +23,7 @@ Then restart pi or run `/reload`.
 Controls:
 
 - `r` refresh
-- arrow keys select items
+- arrow keys select items; columns scroll to keep the selection in view
 - `enter` toggle details
 - `q` or `esc` close
 
