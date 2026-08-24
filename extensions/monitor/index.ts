@@ -446,6 +446,12 @@ function visibleRowCount(columns: BoardColumns): number {
 	return Math.max(MIN_BOARD_ROWS, Math.min(MAX_BOARD_ROWS, longest));
 }
 
+function scrollMarker(total: number, offset: number, rows: number): string {
+	const up = offset > 0 ? "↑" : "";
+	const down = offset + rows < total ? "↓" : "";
+	return up || down ? ` ${up}${down}` : "";
+}
+
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, value));
 }
@@ -733,6 +739,7 @@ class MonitorDashboard {
 	private interval: ReturnType<typeof setInterval> | undefined;
 	private selectedColumn = 0;
 	private selectedRow = 0;
+	private rowOffsets: Record<MonitorStatus, number> = { queued: 0, in_progress: 0, blocked: 0, completed: 0 };
 	private expanded = false;
 	private state = readState();
 	private scan = scanPiSessions();
@@ -802,7 +809,8 @@ class MonitorDashboard {
 
 		const header = STATUS_ORDER.map((status, index) => {
 			const { label, color } = columnStyles[status];
-			const title = ` ${color(bold(label))} ${dim(`(${columns[status].length})`)}`;
+			const count = columns[status].length;
+			const title = ` ${color(bold(label))} ${dim(`(${count})${scrollMarker(count, this.rowOffsets[status], rows)}`)}`;
 			return this.cell(index === this.selectedColumn ? reverse(title) : title, columnWidth);
 		}).join(dim("│"));
 		lines.push(this.pad(`${dim("│")}${header}${dim("│")}`, width));
@@ -810,9 +818,10 @@ class MonitorDashboard {
 
 		for (let row = 0; row < rows; row++) {
 			const rowText = STATUS_ORDER.map((status, column) => {
-				const item = columns[status][row];
+				const index = row + this.rowOffsets[status];
+				const item = columns[status][index];
 				if (!item) return this.cell("", columnWidth);
-				const selected = column === this.selectedColumn && row === this.selectedRow;
+				const selected = column === this.selectedColumn && index === this.selectedRow;
 				const marker = selected ? "›" : " ";
 				const text = `${marker} ${kindIcon(item.kind)} ${item.title} ${dim(formatAge(item.updatedAt))}`;
 				return this.cell(selected ? reverse(text) : text, columnWidth);
@@ -867,10 +876,18 @@ class MonitorDashboard {
 		this.cachedWidth = 0;
 	}
 
+	/** Keeps the cursor inside its column and scrolls that column so the cursor stays on screen. */
 	private clampSelection(): void {
 		this.selectedColumn = clamp(this.selectedColumn, 0, STATUS_ORDER.length - 1);
-		const total = this.columns[STATUS_ORDER[this.selectedColumn]].length;
+		const status = STATUS_ORDER[this.selectedColumn];
+		const total = this.columns[status].length;
+		const rows = visibleRowCount(this.columns);
+
 		this.selectedRow = clamp(this.selectedRow, 0, Math.max(0, total - 1));
+		const offset = clamp(this.rowOffsets[status], 0, Math.max(0, total - rows));
+		if (this.selectedRow < offset) this.rowOffsets[status] = this.selectedRow;
+		else if (this.selectedRow >= offset + rows) this.rowOffsets[status] = this.selectedRow - rows + 1;
+		else this.rowOffsets[status] = offset;
 	}
 
 	private getSelectedItem(): MonitorItem | undefined {
