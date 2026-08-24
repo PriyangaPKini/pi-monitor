@@ -13,6 +13,7 @@ const SESSION_ROOT = join(homedir(), ".pi", "agent", "sessions");
 const MAX_SESSION_FILES = 200;
 const BOARD_WINDOW_MS = 48 * 60 * 60 * 1000;
 const LIVE_SESSION_PREFIX = "live-session:";
+const LIVE_QUEUED_TTL_MS = 20_000;
 
 type MonitorStatus = "queued" | "in_progress" | "blocked" | "completed";
 type MonitorKind = "session" | "agent" | "tool" | "bash" | "subagent" | "background";
@@ -66,15 +67,30 @@ function readState(): MonitorState {
 	try {
 		const raw = readFileSync(STATE_FILE, "utf8");
 		const parsed = JSON.parse(raw) as MonitorState;
-		return {
+		return normalizeState({
 			version: 1,
 			updatedAt: parsed.updatedAt ?? Date.now(),
 			sessions: parsed.sessions ?? {},
 			items: parsed.items ?? {},
-		};
+		});
 	} catch {
 		return createEmptyState();
 	}
+}
+
+function normalizeState(state: MonitorState): MonitorState {
+	for (const [itemId, item] of Object.entries(state.items)) {
+		if (isLegacyQueuedItemId(itemId) || isStaleLiveQueuedItem(item)) delete state.items[itemId];
+	}
+	return state;
+}
+
+function isLegacyQueuedItemId(itemId: string): boolean {
+	return /:queued:\d+$/.test(itemId);
+}
+
+function isStaleLiveQueuedItem(item: MonitorItem): boolean {
+	return item.status === "queued" && item.id.endsWith(":queued") && Date.now() - item.updatedAt > LIVE_QUEUED_TTL_MS;
 }
 
 function writeState(state: MonitorState): void {
@@ -352,8 +368,13 @@ function boardItemKey(item: MonitorItem): string {
 function shouldHideBoardItem(item: MonitorItem): boolean {
 	if (item.kind === "bash") return true;
 	if (item.kind === "agent" && item.id.endsWith(":agent")) return true;
+	if (item.status === "queued" && !isCurrentQueuedItem(item)) return true;
 	if (item.status === "completed" && item.kind === "tool") return true;
 	return false;
+}
+
+function isCurrentQueuedItem(item: MonitorItem): boolean {
+	return item.id.endsWith(":queued") && Date.now() - item.updatedAt <= LIVE_QUEUED_TTL_MS;
 }
 
 function readPiSessionItems(): MonitorItem[] {
