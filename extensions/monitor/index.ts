@@ -245,6 +245,39 @@ function liveSessionItemId(identity: SessionIdentity): string {
 	return `${LIVE_SESSION_PREFIX}${identity.sessionId}`;
 }
 
+function queuedItemId(identity: SessionIdentity): string {
+	return `${identity.sessionId}:queued`;
+}
+
+function removeSessionQueuedItems(identity: SessionIdentity): void {
+	withState((state) => {
+		let changed = false;
+		for (const itemId of Object.keys(state.items)) {
+			if (itemId === queuedItemId(identity) || itemId.startsWith(`${identity.sessionId}:queued:`)) {
+				delete state.items[itemId];
+				changed = true;
+			}
+		}
+		if (changed && state.sessions[identity.sessionId]) state.sessions[identity.sessionId].updatedAt = Date.now();
+	});
+}
+
+function syncQueuedItem(identity: SessionIdentity, ctx: any, title = "Queued message"): void {
+	if (!ctx.hasPendingMessages?.()) {
+		removeSessionQueuedItems(identity);
+		return;
+	}
+	removeSessionQueuedItems(identity);
+	upsertItem(identity, {
+		id: queuedItemId(identity),
+		kind: "agent",
+		status: "queued",
+		title,
+		startedAt: Date.now(),
+		details: "Pi has pending steer or follow-up messages",
+	});
+}
+
 function upsertLiveSessionItem(identity: SessionIdentity, item: Pick<MonitorItem, "title" | "status" | "details">): void {
 	upsertItem(identity, {
 		id: liveSessionItemId(identity),
@@ -740,13 +773,17 @@ export default function (pi: ExtensionAPI) {
 		const sessionName = ensureCurrentSessionName(pi, ctx);
 		const identity = getSessionIdentity(ctx);
 		upsertSession(identity);
+		removeSessionQueuedItems(identity);
 		upsertLiveSessionItem(identity, {
 			title: sessionName,
 			status: "completed",
 			details: "Pi session is idle and ready for input",
 		});
 		if (heartbeat) clearInterval(heartbeat);
-		heartbeat = setInterval(() => upsertSession(identity), 5000);
+		heartbeat = setInterval(() => {
+			upsertSession(identity);
+			syncQueuedItem(identity, ctx);
+		}, 5000);
 	});
 
 	pi.on("session_info_changed", async (event, ctx) => {
@@ -768,9 +805,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("input", async (event, ctx) => {
 		if (!event.streamingBehavior) return;
 		const identity = getSessionIdentity(ctx);
+		removeSessionQueuedItems(identity);
 		const title = textFromInput(event.text) || `${event.streamingBehavior} message`;
 		upsertItem(identity, {
-			id: `${identity.sessionId}:queued:${Date.now()}`,
+			id: queuedItemId(identity),
 			kind: "agent",
 			status: "queued",
 			title,
@@ -781,6 +819,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		const identity = getSessionIdentity(ctx);
+		removeSessionQueuedItems(identity);
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		upsertLiveSessionItem(identity, {
 			title,
@@ -797,8 +836,14 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
+	pi.on("turn_start", async (_event, ctx) => {
+		const identity = getSessionIdentity(ctx);
+		syncQueuedItem(identity, ctx);
+	});
+
 	pi.on("agent_end", async (event, ctx) => {
 		const identity = getSessionIdentity(ctx);
+		syncQueuedItem(identity, ctx);
 		const status = inferLiveSessionStatus(event.messages);
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		upsertLiveSessionItem(identity, {
