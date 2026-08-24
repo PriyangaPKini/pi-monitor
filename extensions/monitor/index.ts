@@ -429,7 +429,7 @@ function readFirstLine(path: string): string {
 function inferPiSessionStatus(summary: PiSessionSummary): MonitorStatus {
 	const text = `${summary.lastAssistantText ?? ""} ${summary.lastUserPrompt ?? ""}`.toLowerCase();
 	if (/queued|pending|next turn/.test(text)) return "queued";
-	if (/awaiting user|waiting for user|waiting on user|seeking input|ask(?:ing)? for input|needs input|need your input|let me know|please confirm|confirm\b|permission required|needs attention/.test(text)) {
+	if (/awaiting user|waiting for user|waiting on user|seeking input|ask(?:ing)? for input|please enter|please provide|what should i use|needs input|need your input|let me know|please confirm|confirm\b|permission required|needs attention/.test(text)) {
 		return "blocked";
 	}
 	if (/running|launched|started|in progress|background|detached|monitoring|mid.flight|will report|once .* finishes|poll|screening|experiment/.test(text)) {
