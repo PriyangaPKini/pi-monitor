@@ -14,6 +14,8 @@ const MAX_SESSION_FILES = 200;
 const BOARD_WINDOW_MS = 48 * 60 * 60 * 1000;
 const LIVE_SESSION_PREFIX = "live-session:";
 const LIVE_QUEUED_TTL_MS = 20_000;
+const LIVE_SESSION_STALE_MS = 15_000;
+const LIVE_TRANSIENT_ITEM_TTL_MS = 2 * 60 * 1000;
 
 type MonitorStatus = "queued" | "in_progress" | "blocked" | "completed";
 type MonitorKind = "session" | "agent" | "tool" | "bash" | "subagent" | "background";
@@ -79,22 +81,38 @@ function readState(): MonitorState {
 }
 
 function normalizeState(state: MonitorState): MonitorState {
+	const now = Date.now();
 	for (const [itemId, item] of Object.entries(state.items)) {
-		if (isLegacyQueuedItemId(itemId) || isStaleLiveQueuedItem(item) || isLegacyBlockedToolItem(item)) delete state.items[itemId];
+		if (shouldPruneItem(itemId, item, state, now)) delete state.items[itemId];
 	}
 	return state;
+}
+
+function shouldPruneItem(itemId: string, item: MonitorItem, state: MonitorState, now: number): boolean {
+	if (isLegacyQueuedItemId(itemId) || isStaleLiveQueuedItem(item, now)) return true;
+	if (item.kind === "tool" || item.kind === "bash") return true;
+	if (item.kind === "agent" && item.id.endsWith(":agent")) return true;
+	if (item.id.startsWith(LIVE_SESSION_PREFIX)) return isStaleLiveSessionItem(item, state, now);
+	return now - item.updatedAt > LIVE_TRANSIENT_ITEM_TTL_MS;
 }
 
 function isLegacyQueuedItemId(itemId: string): boolean {
 	return /:queued:\d+$/.test(itemId);
 }
 
-function isStaleLiveQueuedItem(item: MonitorItem): boolean {
-	return item.status === "queued" && item.id.endsWith(":queued") && Date.now() - item.updatedAt > LIVE_QUEUED_TTL_MS;
+function isStaleLiveQueuedItem(item: MonitorItem, now = Date.now()): boolean {
+	return item.status === "queued" && item.id.endsWith(":queued") && now - item.updatedAt > LIVE_QUEUED_TTL_MS;
 }
 
 function isLegacyBlockedToolItem(item: MonitorItem): boolean {
 	return item.status === "blocked" && (item.kind === "tool" || item.kind === "bash");
+}
+
+function isStaleLiveSessionItem(item: MonitorItem, state: MonitorState, now: number): boolean {
+	const session = state.sessions[item.sessionId];
+	if (!session) return now - item.updatedAt > LIVE_SESSION_STALE_MS;
+	if (session.state === "shutdown") return item.status !== "completed" && now - item.updatedAt > LIVE_SESSION_STALE_MS;
+	return now - session.updatedAt > LIVE_SESSION_STALE_MS;
 }
 
 function writeState(state: MonitorState): void {
@@ -295,6 +313,15 @@ function syncQueuedItem(identity: SessionIdentity, ctx: any, title = "Queued mes
 		title,
 		startedAt: Date.now(),
 		details: "Pi has pending steer or follow-up messages",
+	});
+}
+
+function refreshLiveSessionIfActive(identity: SessionIdentity): void {
+	withState((state) => {
+		const item = state.items[liveSessionItemId(identity)];
+		if (!item || item.status !== "in_progress") return;
+		const now = Date.now();
+		state.items[item.id] = { ...item, updatedAt: now };
 	});
 }
 
@@ -522,14 +549,7 @@ function readFirstLine(path: string): string {
 	}
 }
 
-function inferPiSessionStatus(summary: PiSessionSummary): MonitorStatus {
-	const text = `${summary.lastAssistantText ?? ""} ${summary.lastUserPrompt ?? ""}`.toLowerCase();
-	if (/queued|pending|next turn/.test(text)) return "queued";
-	if (textNeedsInput(text)) return "blocked";
-	if (/running|launched|started|in progress|background|detached|monitoring|mid.flight|will report|once .* finishes|poll|screening|experiment/.test(text)) {
-		return "in_progress";
-	}
-	if (summary.lastMessageRole === "toolResult") return "in_progress";
+function inferPiSessionStatus(_summary: PiSessionSummary): MonitorStatus {
 	return "completed";
 }
 
@@ -807,6 +827,7 @@ export default function (pi: ExtensionAPI) {
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = setInterval(() => {
 			upsertSession(identity);
+			refreshLiveSessionIfActive(identity);
 			syncQueuedItem(identity, ctx);
 		}, 5000);
 	});
