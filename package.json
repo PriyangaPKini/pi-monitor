@@ -1,0 +1,32 @@
+{
+	"name": "pi-monitor",
+	"version": "0.1.0",
+	"description": "Experimental /monitor dashboard extension for pi coding agent sessions.",
+	"type": "module",
+	"private": false,
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"experimental",
+		"monitor",
+		"dashboard"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/PriyangaPKini/pi-monitor.git"
+	},
+	"bugs": {
+		"url": "https://github.com/PriyangaPKini/pi-monitor/issues"
+	},
+	"homepage": "https://github.com/PriyangaPKini/pi-monitor#readme",
+	"license": "MIT",
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions"
+		]
+	}
+}
