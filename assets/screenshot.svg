@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-label="Screenshot of pi-monitor TUI dashboard">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <rect x="70" y="60" width="1060" height="600" rx="18" fill="#020617" stroke="#334155" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="70" y="60" width="1060" height="46" rx="18" fill="#111827"/>
+  <circle cx="100" cy="83" r="7" fill="#ef4444"/>
+  <circle cx="124" cy="83" r="7" fill="#f59e0b"/>
+  <circle cx="148" cy="83" r="7" fill="#22c55e"/>
+
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; }
+    .title { font-size: 28px; font-weight: 700; fill: #f8fafc; }
+    .hint { font-size: 16px; fill: #94a3b8; }
+    .header { font-size: 20px; font-weight: 700; }
+    .item { font-size: 15px; fill: #e2e8f0; }
+    .muted { fill: #64748b; }
+    .box { fill: #0f172a; stroke: #334155; stroke-width: 1.5; }
+  </style>
+
+  <text x="100" y="150" class="mono title">Pi Monitor <tspan fill="#64748b" font-size="22">/monitor</tspan></text>
+  <text x="100" y="180" class="mono hint">r refresh • arrows select • enter details • q/esc close   pi sessions 18 • archive 42 • updated 2s ago</text>
+
+  <g transform="translate(100 215)">
+    <rect class="box" x="0" y="0" width="240" height="330" rx="10"/>
+    <rect class="box" x="260" y="0" width="240" height="330" rx="10"/>
+    <rect class="box" x="520" y="0" width="240" height="330" rx="10"/>
+    <rect class="box" x="780" y="0" width="240" height="330" rx="10"/>
+
+    <text x="20" y="38" class="mono header" fill="#f59e0b">Queued <tspan class="muted">(2)</tspan></text>
+    <text x="280" y="38" class="mono header" fill="#38bdf8">In Progress <tspan class="muted">(4)</tspan></text>
+    <text x="540" y="38" class="mono header" fill="#ef4444">Blocked <tspan class="muted">(1)</tspan></text>
+    <text x="800" y="38" class="mono header" fill="#22c55e">Completed <tspan class="muted">(11)</tspan></text>
+
+    <line x1="0" y1="58" x2="1020" y2="58" stroke="#334155"/>
+
+    <rect x="270" y="75" width="220" height="32" rx="6" fill="#e2e8f0" opacity="0.16"/>
+    <text x="20" y="96" class="mono item">› ○ review PR notes <tspan class="muted">12s</tspan></text>
+    <text x="20" y="132" class="mono item">  ● follow-up msg <tspan class="muted">1m</tspan></text>
+
+    <text x="280" y="96" class="mono item">› ● Agent turn <tspan class="muted">2s</tspan></text>
+    <text x="280" y="132" class="mono item">  ◆ edit <tspan class="muted">5s</tspan></text>
+    <text x="280" y="168" class="mono item">  ◇ subagent <tspan class="muted">8m</tspan></text>
+    <text x="280" y="204" class="mono item">  ○ experiment run <tspan class="muted">34m</tspan></text>
+
+    <text x="540" y="96" class="mono item">› ○ needs input <tspan class="muted">6m</tspan></text>
+
+    <text x="800" y="96" class="mono item">› ○ publish extension <tspan class="muted">1m</tspan></text>
+    <text x="800" y="132" class="mono item">  ○ run tests <tspan class="muted">18m</tspan></text>
+    <text x="800" y="168" class="mono item">  ○ summarize findings <tspan class="muted">2h</tspan></text>
+    <text x="800" y="204" class="mono item">  ○ update README <tspan class="muted">3h</tspan></text>
+  </g>
+
+  <g transform="translate(100 575)">
+    <text x="0" y="0" class="mono header" fill="#f8fafc">Details</text>
+    <text x="0" y="34" class="mono item">status: in_progress  age: 2s</text>
+    <text x="0" y="64" class="mono item">summary Agent turn is processing a prompt and tracking active tools across pi sessions.</text>
+    <text x="0" y="94" class="mono item muted">cwd /Users/example/project • last tool edit</text>
+  </g>
+</svg>

@@ -4,6 +4,8 @@
 
 `pi-monitor` adds a `/monitor` command to pi. It opens an interactive TUI board showing queued, in-progress, blocked, and completed pi work across recent sessions.
 
+![pi-monitor screenshot](assets/screenshot.svg)
+
 ## Install
 
 ```bash
