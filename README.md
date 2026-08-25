@@ -31,7 +31,7 @@ Controls:
 
 - Maintains a central live registry under `~/.pi/agent/monitor/` from pi lifecycle events emitted by each loaded extension process.
 - Reads recent pi session files from `~/.pi/agent/sessions/` as a fallback for sessions that are not in the live registry.
-- Records only live session rows, pending queued messages, and running subagents; bash and other tool calls are not tracked.
+- Records only live session rows and pending queued messages; tool calls are not tracked.
 - Shows **Blocked** only from live registry signals, such as a live Pi turn ending with text that asks for input or a provider error.
 - Intended for interactive TUI mode.
 
