@@ -149,7 +149,12 @@ function writeState(state: MonitorState): void {
 	state.updatedAt = Date.now();
 	const tmpFile = join(dirname(STATE_FILE), `.state.${process.pid}.${Date.now()}.tmp`);
 	writeFileSync(tmpFile, `${JSON.stringify(state, null, "\t")}\n`, "utf8");
-	renameSync(tmpFile, STATE_FILE);
+	try {
+		renameSync(tmpFile, STATE_FILE);
+	} catch (error) {
+		rmSync(tmpFile, { force: true });
+		throw error;
+	}
 }
 
 /** The only transaction boundary: read, mutate, drop what the board can no longer show, write. */
