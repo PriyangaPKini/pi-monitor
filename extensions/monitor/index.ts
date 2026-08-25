@@ -893,8 +893,17 @@ class MonitorDashboard {
 
 // --- extension ---------------------------------------------------------------
 
+type LiveRow = Pick<MonitorItem, "title" | "status" | "details">;
+
 export default function (pi: ExtensionAPI) {
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
+	let liveRow: LiveRow | undefined;
+
+	/** Records what this session last published so the heartbeat can put it back if it goes missing. */
+	const publishLiveRow = (state: MonitorState, identity: SessionIdentity, row: LiveRow): void => {
+		liveRow = row;
+		putLiveSessionItem(state, identity, row);
+	};
 
 	pi.on("session_start", async (_event, ctx) => {
 		const sessionName = ensureCurrentSessionName(pi, ctx);
@@ -902,7 +911,7 @@ export default function (pi: ExtensionAPI) {
 		withState((state) => {
 			touchSession(state, identity);
 			removeQueuedItems(state, identity);
-			putLiveSessionItem(state, identity, {
+			publishLiveRow(state, identity, {
 				title: sessionName,
 				status: "completed",
 				details: "Pi session is idle and ready for input",
@@ -914,6 +923,7 @@ export default function (pi: ExtensionAPI) {
 			const pending = hasPendingMessages(ctx);
 			withState((state) => {
 				touchSession(state, identity);
+				if (liveRow && !state.items[liveSessionItemId(identity)]) putLiveSessionItem(state, identity, liveRow);
 				syncQueuedItem(state, identity, pending);
 			});
 		}, HEARTBEAT_MS);
@@ -929,7 +939,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = getSessionIdentity(ctx);
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		withState((state) => {
-			putLiveSessionItem(state, identity, {
+			publishLiveRow(state, identity, {
 				title,
 				status: "completed",
 				details: "Pi session shut down",
@@ -960,7 +970,7 @@ export default function (pi: ExtensionAPI) {
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		withState((state) => {
 			removeQueuedItems(state, identity);
-			putLiveSessionItem(state, identity, {
+			publishLiveRow(state, identity, {
 				title,
 				status: "in_progress",
 				details: "Pi agent is processing a prompt",
@@ -981,7 +991,7 @@ export default function (pi: ExtensionAPI) {
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		withState((state) => {
 			syncQueuedItem(state, identity, pending);
-			putLiveSessionItem(state, identity, {
+			publishLiveRow(state, identity, {
 				title,
 				status,
 				details: status === "blocked" ? "Pi agent is waiting for user input" : "Pi agent turn completed",
@@ -994,7 +1004,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = getSessionIdentity(ctx);
 		const title = pi.getSessionName?.() || generateSessionName(ctx);
 		withState((state) =>
-			putLiveSessionItem(state, identity, {
+			publishLiveRow(state, identity, {
 				title,
 				status: "blocked",
 				details: `Provider response ${event.status}`,
