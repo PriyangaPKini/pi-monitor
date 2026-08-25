@@ -19,6 +19,8 @@ const LIVE_SESSION_PREFIX = "live-session:";
 const QUEUED_ITEM_SUFFIX = ":queued";
 const LIVE_QUEUED_TTL_MS = 20_000;
 const LIVE_SESSION_STALE_MS = 15_000;
+const SUBAGENT_ITEM_TTL_MS = 2 * 60 * 1000;
+const DETAIL_LIMIT = 500;
 const LOCK_TIMEOUT_MS = 500;
 const LOCK_STALE_MS = 5000;
 const LOCK_RETRY_MS = 5;
@@ -26,7 +28,7 @@ const MIN_BOARD_ROWS = 8;
 const MAX_BOARD_ROWS = 18;
 
 const STATUS_ORDER = ["queued", "in_progress", "blocked", "completed"] as const;
-const MONITOR_KINDS = ["session", "agent"] as const;
+const MONITOR_KINDS = ["session", "agent", "subagent"] as const;
 
 type MonitorStatus = (typeof STATUS_ORDER)[number];
 type MonitorKind = (typeof MONITOR_KINDS)[number];
@@ -230,6 +232,10 @@ function queuedItemId(identity: SessionIdentity): string {
 	return `${identity.sessionId}${QUEUED_ITEM_SUFFIX}`;
 }
 
+function subagentItemId(identity: SessionIdentity, toolCallId: unknown): string {
+	return `${identity.sessionId}:tool:${String(toolCallId)}`;
+}
+
 /**
  * Single source of truth for what belongs on the board. Visibility only decays with
  * time, so pruning is just "delete what is no longer visible".
@@ -237,6 +243,7 @@ function queuedItemId(identity: SessionIdentity): string {
 function isBoardVisible(item: MonitorItem, state: MonitorState, now: number): boolean {
 	if (item.id.startsWith(LIVE_SESSION_PREFIX)) return isLiveSessionFresh(item, state, now);
 	if (item.id.endsWith(QUEUED_ITEM_SUFFIX)) return now - item.updatedAt <= LIVE_QUEUED_TTL_MS;
+	if (item.kind === "subagent") return now - item.updatedAt <= SUBAGENT_ITEM_TTL_MS;
 	return false;
 }
 
@@ -286,6 +293,14 @@ function putLiveSessionItem(state: MonitorState, identity: SessionIdentity, item
 	});
 }
 
+function markItemCompleted(state: MonitorState, identity: SessionIdentity, itemId: string, details: string): void {
+	const existing = state.items[itemId];
+	if (!existing) return;
+	const now = Date.now();
+	state.items[itemId] = { ...existing, status: "completed", details, completedAt: now, updatedAt: now };
+	touchSession(state, identity);
+}
+
 function removeQueuedItems(state: MonitorState, identity: SessionIdentity): void {
 	const currentId = queuedItemId(identity);
 	const legacyPrefix = `${currentId}:`;
@@ -330,6 +345,11 @@ function getSessionIdentity(ctx: any): SessionIdentity {
 
 function hasPendingMessages(ctx: unknown): boolean {
 	return (ctx as { hasPendingMessages?: () => boolean } | null)?.hasPendingMessages?.() === true;
+}
+
+/** Matches the tools registered by the pi-subagents extension ("subagent", "subagent_wait"). */
+function isSubagentTool(toolName: unknown): boolean {
+	return String(toolName ?? "").includes("subagent");
 }
 
 function ensureCurrentSessionName(pi: ExtensionAPI, ctx: any): string {
@@ -712,6 +732,8 @@ function kindIcon(kind: MonitorKind): string {
 	switch (kind) {
 		case "agent":
 			return "●";
+		case "subagent":
+			return "◇";
 		case "session":
 			return "○";
 	}
@@ -997,6 +1019,40 @@ export default function (pi: ExtensionAPI) {
 				details: status === "blocked" ? "Pi agent is waiting for user input" : "Pi agent turn completed",
 			});
 		});
+	});
+
+	pi.on("tool_execution_start", async (event, ctx) => {
+		if (!isSubagentTool(event.toolName)) return;
+		const identity = getSessionIdentity(ctx);
+		withState((state) =>
+			putItem(state, identity, {
+				id: subagentItemId(identity, event.toolCallId),
+				kind: "subagent",
+				status: "in_progress",
+				title: String(event.toolName ?? "subagent"),
+				startedAt: Date.now(),
+				details: JSON.stringify(event.args ?? {}).slice(0, DETAIL_LIMIT),
+			}),
+		);
+	});
+
+	pi.on("tool_execution_update", async (event, ctx) => {
+		if (!isSubagentTool(event.toolName)) return;
+		const identity = getSessionIdentity(ctx);
+		const details = event.partialResult ? JSON.stringify(event.partialResult).slice(0, DETAIL_LIMIT) : undefined;
+		withState((state) => {
+			const itemId = subagentItemId(identity, event.toolCallId);
+			const existing = state.items[itemId];
+			if (!existing) return;
+			state.items[itemId] = { ...existing, details: details ?? existing.details, updatedAt: Date.now() };
+			touchSession(state, identity);
+		});
+	});
+
+	pi.on("tool_execution_end", async (event, ctx) => {
+		const identity = getSessionIdentity(ctx);
+		const details = event.isError ? "Subagent ended with an error" : "Subagent completed";
+		withState((state) => markItemCompleted(state, identity, subagentItemId(identity, event.toolCallId), details));
 	});
 
 	pi.on("after_provider_response", async (event, ctx) => {
