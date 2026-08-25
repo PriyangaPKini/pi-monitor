@@ -863,8 +863,11 @@ class MonitorDashboard {
 		const rows = visibleRowCount(this.columns);
 
 		this.selectedRow = clamp(this.selectedRow, 0, Math.max(0, total - 1));
-		const offset = clamp(this.rowOffsets[status], 0, Math.max(0, total - rows));
-		this.rowOffsets[status] = offset;
+		for (const column of STATUS_ORDER) {
+			this.rowOffsets[column] = clamp(this.rowOffsets[column], 0, Math.max(0, this.columns[column].length - rows));
+		}
+
+		const offset = this.rowOffsets[status];
 		if (this.selectedRow < offset) this.rowOffsets[status] = this.selectedRow;
 		else if (this.selectedRow >= offset + rows) this.rowOffsets[status] = this.selectedRow - rows + 1;
 	}
