@@ -74,7 +74,10 @@ type SessionIdentity = {
 
 type ItemInput = Omit<MonitorItem, "sessionId" | "sessionFile" | "cwd" | "updatedAt">;
 
-type BoardColumns = Record<MonitorStatus, MonitorItem[]>;
+/** A stored item as the board sees it. `idle` is derived at render time and never persisted. */
+type BoardItem = MonitorItem & { idle?: boolean };
+
+type BoardColumns = Record<MonitorStatus, BoardItem[]>;
 
 function createEmptyState(): MonitorState {
 	return { version: STATE_VERSION, updatedAt: Date.now(), sessions: {}, items: {} };
@@ -430,16 +433,41 @@ function emptyColumns(): BoardColumns {
 function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardColumns {
 	const now = Date.now();
 	const columns = emptyColumns();
+	const alive = heartbeatingSessionKeys(state, now);
 
-	const itemsByKey = new Map<string, MonitorItem>();
-	for (const item of sessionItems) itemsByKey.set(boardItemKey(item), item);
+	const itemsByKey = new Map<string, BoardItem>();
+	for (const item of sessionItems) itemsByKey.set(boardItemKey(item), asLiveIfHeartbeating(item, alive));
 	for (const item of Object.values(state.items)) {
-		if (isBoardVisible(item, state, now)) itemsByKey.set(boardItemKey(item), item);
+		if (isBoardVisible(item, state, now)) itemsByKey.set(boardItemKey(item), asLiveIfHeartbeating(item, alive));
 	}
 
 	for (const item of itemsByKey.values()) columns[item.status].push(item);
 	for (const items of Object.values(columns)) items.sort((a, b) => b.updatedAt - a.updatedAt);
 	return columns;
+}
+
+/** Ids and file paths of sessions whose process is still checking in. */
+function heartbeatingSessionKeys(state: MonitorState, now: number): ReadonlySet<string> {
+	const keys = new Set<string>();
+	for (const session of Object.values(state.sessions)) {
+		if (session.state !== "active" || now - session.updatedAt > LIVE_SESSION_STALE_MS) continue;
+		keys.add(session.id);
+		if (session.sessionFile) keys.add(session.sessionFile);
+	}
+	return keys;
+}
+
+/**
+ * A session read off disk looks finished, but the registry may know its process is
+ * still alive — including sessions whose own row is missing because they run an
+ * older build of this extension. Liveness is a fact from the heartbeat, not a guess.
+ */
+function asLiveIfHeartbeating(item: MonitorItem, alive: ReadonlySet<string>): BoardItem {
+	if (item.kind !== "session") return item;
+	if (!alive.has(item.sessionId) && !(item.sessionFile && alive.has(item.sessionFile))) return item;
+	if (item.status === "in_progress") return { ...item, idle: false };
+	if (item.status === "completed") return { ...item, status: "in_progress", completedAt: undefined, idle: true };
+	return item;
 }
 
 function boardItemKey(item: MonitorItem): string {
@@ -728,6 +756,11 @@ function oneLineSummary(text: string): string {
 		.trim();
 }
 
+function boardIcon(item: BoardItem): string {
+	if (item.kind === "session" && item.idle !== undefined) return item.idle ? "○" : "●";
+	return kindIcon(item.kind);
+}
+
 function kindIcon(kind: MonitorKind): string {
 	switch (kind) {
 		case "agent":
@@ -829,7 +862,11 @@ class MonitorDashboard {
 				if (!item) return this.cell("", columnWidth);
 				const selected = column === this.selectedColumn && index === this.selectedRow;
 				const marker = selected ? "›" : " ";
-				const text = `${marker} ${kindIcon(item.kind)} ${item.title} ${dim(formatAge(item.updatedAt))}`;
+				const age = formatAge(item.updatedAt);
+				const phase = item.idle === undefined ? "" : `${item.idle ? "idle" : "working"} `;
+				const text = item.idle
+					? dim(`${marker} ${boardIcon(item)} ${item.title} ${phase}${age}`)
+					: `${marker} ${boardIcon(item)} ${item.title} ${dim(`${phase}${age}`)}`;
 				return this.cell(selected ? reverse(text) : text, columnWidth);
 			}).join(dim("│"));
 			lines.push(this.pad(`${dim("│")}${rowText}${dim("│")}`, width));
@@ -1016,7 +1053,7 @@ export default function (pi: ExtensionAPI) {
 			publishLiveRow(state, identity, {
 				title,
 				status,
-				details: status === "blocked" ? "Pi agent is waiting for user input" : "Pi agent turn completed",
+				details: status === "blocked" ? "Pi agent is waiting for user input" : "Pi agent is idle and ready for input",
 			});
 		});
 	});
