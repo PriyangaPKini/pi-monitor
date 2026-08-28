@@ -25,7 +25,7 @@ const LOCK_RETRY_MS = 5;
 const MIN_BOARD_ROWS = 8;
 const MAX_BOARD_ROWS = 18;
 
-const STATUS_ORDER = ["queued", "in_progress", "blocked", "completed"] as const;
+const STATUS_ORDER = ["in_progress", "blocked", "completed"] as const;
 /**
  * Columns the board draws, in display order. These are a render-time view: "idle" is
  * derived from the heartbeat and is never a stored status.
@@ -399,10 +399,9 @@ function emptyColumns(): BoardColumns {
 	return { blocked: [], in_progress: [], idle: [], completed: [] };
 }
 
-/** An alive session between turns gets its own column; a pending message sits with the turn it is waiting on. */
+/** An alive session between turns gets its own column; everything else follows its stored status. */
 function boardColumnFor(item: BoardItem): BoardColumn {
-	if (item.idle) return "idle";
-	return item.status === "queued" ? "in_progress" : item.status;
+	return item.idle ? "idle" : item.status;
 }
 
 function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardColumns {
