@@ -436,9 +436,9 @@ function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardC
 	const alive = heartbeatingSessionKeys(state, now);
 
 	const itemsByKey = new Map<string, BoardItem>();
-	for (const item of sessionItems) itemsByKey.set(boardItemKey(item), asLiveIfHeartbeating(item, alive));
+	for (const item of sessionItems) itemsByKey.set(boardItemKey(item), markLiveness(item, alive));
 	for (const item of Object.values(state.items)) {
-		if (isBoardVisible(item, state, now)) itemsByKey.set(boardItemKey(item), asLiveIfHeartbeating(item, alive));
+		if (isBoardVisible(item, state, now)) itemsByKey.set(boardItemKey(item), markLiveness(item, alive));
 	}
 
 	for (const item of itemsByKey.values()) columns[item.status].push(item);
@@ -458,15 +458,15 @@ function heartbeatingSessionKeys(state: MonitorState, now: number): ReadonlySet<
 }
 
 /**
- * A session read off disk looks finished, but the registry may know its process is
- * still alive — including sessions whose own row is missing because they run an
- * older build of this extension. Liveness is a fact from the heartbeat, not a guess.
+ * Records whether a session's process is still checking in, without moving it between
+ * columns. In Progress stays "actually working"; a session that is alive but between
+ * turns belongs with the finished ones, marked so it reads as idle rather than done.
  */
-function asLiveIfHeartbeating(item: MonitorItem, alive: ReadonlySet<string>): BoardItem {
+function markLiveness(item: MonitorItem, alive: ReadonlySet<string>): BoardItem {
 	if (item.kind !== "session") return item;
 	if (!alive.has(item.sessionId) && !(item.sessionFile && alive.has(item.sessionFile))) return item;
 	if (item.status === "in_progress") return { ...item, idle: false };
-	if (item.status === "completed") return { ...item, status: "in_progress", completedAt: undefined, idle: true };
+	if (item.status === "completed") return { ...item, idle: true };
 	return item;
 }
 
