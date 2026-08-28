@@ -759,7 +759,8 @@ function wrapDetailLine(label: string, text: string, width: number, maxLines: nu
 function oneLineSummary(text: string): string {
 	return text
 		.replace(/```[\s\S]*?```/g, " ")
-		.replace(/[#*_`>-]/g, " ")
+		.replace(/^\s*[-*+]\s+/gm, " ")
+		.replace(/[#*_`>]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
 }
