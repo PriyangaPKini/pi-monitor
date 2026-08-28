@@ -358,17 +358,21 @@ function isSubagentTool(toolName: unknown): boolean {
 	return String(toolName ?? "").includes("subagent");
 }
 
-function ensureCurrentSessionName(pi: ExtensionAPI, ctx: any): string {
-	const existing = pi.getSessionName?.() || ctx.sessionManager?.getSessionName?.();
-	if (existing) {
-		showSessionName(ctx, existing);
-		return existing;
-	}
+/** What to display for this session, without claiming a name it has not earned yet. */
+function currentSessionName(pi: ExtensionAPI, ctx: any): string {
+	return pi.getSessionName?.() || ctx.sessionManager?.getSessionName?.() || generateSessionName(ctx);
+}
 
-	const generated = generateSessionName(ctx);
-	pi.setSessionName?.(generated);
-	showSessionName(ctx, generated);
-	return generated;
+/**
+ * At session_start there is no prompt yet, so naming there always fell back to
+ * `<cwd>-<id suffix>`. Name it from the first thing the user actually says instead.
+ */
+function nameSessionFromPrompt(pi: ExtensionAPI, ctx: any, text: unknown): void {
+	if (pi.getSessionName?.() || ctx.sessionManager?.getSessionName?.()) return;
+	const name = compactName(textFromInput(text));
+	if (!name) return;
+	pi.setSessionName?.(name);
+	showSessionName(ctx, name);
 }
 
 function showSessionName(ctx: any, name: string): void {
@@ -968,7 +972,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
-		const sessionName = ensureCurrentSessionName(pi, ctx);
+		const sessionName = currentSessionName(pi, ctx);
+		showSessionName(ctx, sessionName);
 		const identity = getSessionIdentity(ctx);
 		withState((state) => {
 			touchSession(state, identity);
@@ -999,7 +1004,7 @@ export default function (pi: ExtensionAPI) {
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = undefined;
 		const identity = getSessionIdentity(ctx);
-		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		const title = currentSessionName(pi, ctx);
 		withState((state) => {
 			publishLiveRow(state, identity, {
 				title,
@@ -1011,6 +1016,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event, ctx) => {
+		nameSessionFromPrompt(pi, ctx, event.text);
 		if (!event.streamingBehavior) return;
 		const identity = getSessionIdentity(ctx);
 		const title = textFromInput(event.text) || `${event.streamingBehavior} message`;
@@ -1029,7 +1035,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		const identity = getSessionIdentity(ctx);
-		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		const title = currentSessionName(pi, ctx);
 		withState((state) => {
 			removeQueuedItems(state, identity);
 			publishLiveRow(state, identity, {
@@ -1050,7 +1056,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = getSessionIdentity(ctx);
 		const pending = hasPendingMessages(ctx);
 		const status = inferLiveSessionStatus(event.messages);
-		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		const title = currentSessionName(pi, ctx);
 		withState((state) => {
 			syncQueuedItem(state, identity, pending);
 			publishLiveRow(state, identity, {
@@ -1098,7 +1104,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("after_provider_response", async (event, ctx) => {
 		if (event.status !== 429 && event.status < 500) return;
 		const identity = getSessionIdentity(ctx);
-		const title = pi.getSessionName?.() || generateSessionName(ctx);
+		const title = currentSessionName(pi, ctx);
 		withState((state) =>
 			publishLiveRow(state, identity, {
 				title,
