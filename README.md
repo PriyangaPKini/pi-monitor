@@ -2,7 +2,7 @@
 
 > **Experimental:** this pi extension is an early personal experiment. APIs, storage format, and UI behavior may change without notice.
 
-`pi-monitor` adds a `/monitor` command to pi. It opens an interactive TUI board showing queued, in-progress, blocked, and completed pi work across recent sessions.
+`pi-monitor` adds a `/monitor` command to pi. It opens an interactive TUI board showing queued, in-progress, idle, blocked, and completed pi work across recent sessions.
 
 ![pi-monitor screenshot](assets/screenshot.svg)
 
@@ -33,7 +33,7 @@ Controls:
 - Reads recent pi session files from `~/.pi/agent/sessions/` as a fallback for sessions that are not in the live registry.
 - Records live session rows, pending queued messages, and running subagents (the `subagent` and `subagent_wait` tools from the pi-subagents extension). Built-in tool calls such as bash are not tracked.
 - Shows **Blocked** only from live registry signals, such as a live Pi turn ending with text that asks for input or a provider error.
-- Shows any session whose process is still heartbeating under **In Progress**, whether it is mid-turn or waiting for input. Mid-turn rows are bright with a filled marker; idle-but-alive rows are dimmed with a hollow one. This is derived from the registry heartbeat at render time and is never written to the state file.
+- Separates **In Progress** (a session mid-turn) from **Idle** (a session whose process is still heartbeating but is between turns). **Completed** is left for sessions that have actually finished. The idle column is derived from the registry heartbeat at render time and is never written to the state file, so sessions running an older build are placed correctly without needing a restart.
 - Intended for interactive TUI mode.
 
 ## License

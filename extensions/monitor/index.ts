@@ -28,9 +28,12 @@ const MIN_BOARD_ROWS = 8;
 const MAX_BOARD_ROWS = 18;
 
 const STATUS_ORDER = ["queued", "in_progress", "blocked", "completed"] as const;
+/** Columns the board draws. "idle" is derived at render time and is never a stored status. */
+const BOARD_COLUMNS = ["queued", "in_progress", "idle", "blocked", "completed"] as const;
 const MONITOR_KINDS = ["session", "agent", "subagent"] as const;
 
 type MonitorStatus = (typeof STATUS_ORDER)[number];
+type BoardColumn = (typeof BOARD_COLUMNS)[number];
 type MonitorKind = (typeof MONITOR_KINDS)[number];
 
 const MONITOR_STATUSES: ReadonlySet<string> = new Set(STATUS_ORDER);
@@ -77,7 +80,7 @@ type ItemInput = Omit<MonitorItem, "sessionId" | "sessionFile" | "cwd" | "update
 /** A stored item as the board sees it. `idle` is derived at render time and never persisted. */
 type BoardItem = MonitorItem & { idle?: boolean };
 
-type BoardColumns = Record<MonitorStatus, BoardItem[]>;
+type BoardColumns = Record<BoardColumn, BoardItem[]>;
 
 function createEmptyState(): MonitorState {
 	return { version: STATE_VERSION, updatedAt: Date.now(), sessions: {}, items: {} };
@@ -427,7 +430,12 @@ function textNeedsInput(text: string): boolean {
 // --- board assembly ----------------------------------------------------------
 
 function emptyColumns(): BoardColumns {
-	return { queued: [], in_progress: [], blocked: [], completed: [] };
+	return { queued: [], in_progress: [], idle: [], blocked: [], completed: [] };
+}
+
+/** An alive session between turns gets its own column; everything else follows its stored status. */
+function boardColumnFor(item: BoardItem): BoardColumn {
+	return item.idle ? "idle" : item.status;
 }
 
 function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardColumns {
@@ -441,7 +449,7 @@ function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardC
 		if (isBoardVisible(item, state, now)) itemsByKey.set(boardItemKey(item), markLiveness(item, alive));
 	}
 
-	for (const item of itemsByKey.values()) columns[item.status].push(item);
+	for (const item of itemsByKey.values()) columns[boardColumnFor(item)].push(item);
 	for (const items of Object.values(columns)) items.sort((a, b) => b.updatedAt - a.updatedAt);
 	return columns;
 }
@@ -476,7 +484,7 @@ function boardItemKey(item: MonitorItem): string {
 }
 
 function visibleRowCount(columns: BoardColumns): number {
-	const longest = Math.max(...STATUS_ORDER.map((status) => columns[status].length), 1);
+	const longest = Math.max(...BOARD_COLUMNS.map((column) => columns[column].length), 1);
 	return Math.max(MIN_BOARD_ROWS, Math.min(MAX_BOARD_ROWS, longest));
 }
 
@@ -756,11 +764,6 @@ function oneLineSummary(text: string): string {
 		.trim();
 }
 
-function boardIcon(item: BoardItem): string {
-	if (item.kind === "session" && item.idle !== undefined) return item.idle ? "○" : "●";
-	return kindIcon(item.kind);
-}
-
 function kindIcon(kind: MonitorKind): string {
 	switch (kind) {
 		case "agent":
@@ -778,7 +781,7 @@ class MonitorDashboard {
 	private interval: ReturnType<typeof setInterval> | undefined;
 	private selectedColumn = 0;
 	private selectedRow = 0;
-	private rowOffsets: Record<MonitorStatus, number> = { queued: 0, in_progress: 0, blocked: 0, completed: 0 };
+	private rowOffsets: Record<BoardColumn, number> = { queued: 0, in_progress: 0, idle: 0, blocked: 0, completed: 0 };
 	private expanded = false;
 	private state = readState();
 	private scan = scanPiSessions();
@@ -828,45 +831,44 @@ class MonitorDashboard {
 		const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 		const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 		const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+		const blue = (s: string) => `\x1b[34m${s}\x1b[0m`;
 		const reverse = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
-		const columnStyles: Record<MonitorStatus, { label: string; color: (s: string) => string }> = {
+		const columnStyles: Record<BoardColumn, { label: string; color: (s: string) => string }> = {
 			queued: { label: "Queued", color: yellow },
 			in_progress: { label: "In Progress", color: cyan },
+			idle: { label: "Idle", color: blue },
 			blocked: { label: "Blocked", color: red },
 			completed: { label: "Completed", color: green },
 		};
 		const columns = this.columns;
 		const rows = visibleRowCount(columns);
-		const columnWidth = Math.max(18, Math.floor((width - 5) / 4));
-		const boardWidth = columnWidth * 4 + 5;
+		const columnCount = BOARD_COLUMNS.length;
+		const columnWidth = Math.max(16, Math.floor((width - columnCount - 1) / columnCount));
+		const boardWidth = columnWidth * columnCount + columnCount + 1;
 		const selectedItem = this.getSelectedItem();
 
 		lines.push(this.pad(truncateToWidth(`${bold("Pi Monitor")} ${dim("/monitor")}  ${dim("Board")}`, width), width));
 		lines.push(this.pad(truncateToWidth(`${dim("r refresh • arrows select • enter details • q/esc close")}  ${dim(`pi sessions ${this.scan.items.length} • archive ${this.scan.archivedCount} • updated ${formatAge(this.state.updatedAt)} ago`)}`, width), width));
 		lines.push(this.pad(dim(`╭${"─".repeat(Math.max(0, boardWidth - 2))}╮`), width));
 
-		const header = STATUS_ORDER.map((status, index) => {
+		const header = BOARD_COLUMNS.map((status, index) => {
 			const { label, color } = columnStyles[status];
 			const count = columns[status].length;
 			const title = ` ${color(bold(label))} ${dim(`(${count})${scrollMarker(count, this.rowOffsets[status], rows)}`)}`;
 			return this.cell(index === this.selectedColumn ? reverse(title) : title, columnWidth);
 		}).join(dim("│"));
 		lines.push(this.pad(`${dim("│")}${header}${dim("│")}`, width));
-		lines.push(this.pad(dim(`├${Array.from({ length: 4 }, () => "─".repeat(columnWidth)).join("┼")}┤`), width));
+		lines.push(this.pad(dim(`├${Array.from({ length: columnCount }, () => "─".repeat(columnWidth)).join("┼")}┤`), width));
 
 		for (let row = 0; row < rows; row++) {
-			const rowText = STATUS_ORDER.map((status, column) => {
+			const rowText = BOARD_COLUMNS.map((status, column) => {
 				const index = row + this.rowOffsets[status];
 				const item = columns[status][index];
 				if (!item) return this.cell("", columnWidth);
 				const selected = column === this.selectedColumn && index === this.selectedRow;
 				const marker = selected ? "›" : " ";
-				const age = formatAge(item.updatedAt);
-				const phase = item.idle === undefined ? "" : `${item.idle ? "idle" : "working"} `;
-				const text = item.idle
-					? dim(`${marker} ${boardIcon(item)} ${item.title} ${phase}${age}`)
-					: `${marker} ${boardIcon(item)} ${item.title} ${dim(`${phase}${age}`)}`;
+				const text = `${marker} ${kindIcon(item.kind)} ${item.title} ${dim(formatAge(item.updatedAt))}`;
 				return this.cell(selected ? reverse(text) : text, columnWidth);
 			}).join(dim("│"));
 			lines.push(this.pad(`${dim("│")}${rowText}${dim("│")}`, width));
@@ -921,13 +923,13 @@ class MonitorDashboard {
 
 	/** Keeps the cursor inside its column and scrolls that column so the cursor stays on screen. */
 	private clampSelection(): void {
-		this.selectedColumn = clamp(this.selectedColumn, 0, STATUS_ORDER.length - 1);
-		const status = STATUS_ORDER[this.selectedColumn];
+		this.selectedColumn = clamp(this.selectedColumn, 0, BOARD_COLUMNS.length - 1);
+		const status = BOARD_COLUMNS[this.selectedColumn];
 		const total = this.columns[status].length;
 		const rows = visibleRowCount(this.columns);
 
 		this.selectedRow = clamp(this.selectedRow, 0, Math.max(0, total - 1));
-		for (const column of STATUS_ORDER) {
+		for (const column of BOARD_COLUMNS) {
 			this.rowOffsets[column] = clamp(this.rowOffsets[column], 0, Math.max(0, this.columns[column].length - rows));
 		}
 
@@ -937,7 +939,7 @@ class MonitorDashboard {
 	}
 
 	private getSelectedItem(): MonitorItem | undefined {
-		return this.columns[STATUS_ORDER[this.selectedColumn]][this.selectedRow];
+		return this.columns[BOARD_COLUMNS[this.selectedColumn]][this.selectedRow];
 	}
 
 	private cell(content: string, width: number): string {
@@ -946,7 +948,8 @@ class MonitorDashboard {
 	}
 
 	private pad(line: string, width: number): string {
-		return `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+		const text = visibleWidth(line) > width ? truncateToWidth(line, width) : line;
+		return `${text}${" ".repeat(Math.max(0, width - visibleWidth(text)))}`;
 	}
 }
 
@@ -1106,7 +1109,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("monitor", {
-		description: "Show a board of queued, in-progress, blocked, and completed pi work across sessions",
+		description: "Show a board of queued, in-progress, idle, blocked, and completed pi work across sessions",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("Monitor requires interactive TUI mode", "error");
