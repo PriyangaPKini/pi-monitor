@@ -16,8 +16,6 @@ const HEARTBEAT_MS = 5000;
 const MAX_SESSION_FILES = 200;
 const BOARD_WINDOW_MS = 48 * 60 * 60 * 1000;
 const LIVE_SESSION_PREFIX = "live-session:";
-const QUEUED_ITEM_SUFFIX = ":queued";
-const LIVE_QUEUED_TTL_MS = 20_000;
 const LIVE_SESSION_STALE_MS = 15_000;
 const SUBAGENT_ITEM_TTL_MS = 2 * 60 * 1000;
 const DETAIL_LIMIT = 500;
@@ -28,8 +26,11 @@ const MIN_BOARD_ROWS = 8;
 const MAX_BOARD_ROWS = 18;
 
 const STATUS_ORDER = ["queued", "in_progress", "blocked", "completed"] as const;
-/** Columns the board draws. "idle" is derived at render time and is never a stored status. */
-const BOARD_COLUMNS = ["queued", "in_progress", "idle", "blocked", "completed"] as const;
+/**
+ * Columns the board draws, in display order. These are a render-time view: "idle" is
+ * derived from the heartbeat and is never a stored status.
+ */
+const BOARD_COLUMNS = ["blocked", "in_progress", "idle", "completed"] as const;
 const MONITOR_KINDS = ["session", "agent", "subagent"] as const;
 
 type MonitorStatus = (typeof STATUS_ORDER)[number];
@@ -234,10 +235,6 @@ function liveSessionItemId(identity: SessionIdentity): string {
 	return `${LIVE_SESSION_PREFIX}${identity.sessionId}`;
 }
 
-function queuedItemId(identity: SessionIdentity): string {
-	return `${identity.sessionId}${QUEUED_ITEM_SUFFIX}`;
-}
-
 function subagentItemId(identity: SessionIdentity, toolCallId: unknown): string {
 	return `${identity.sessionId}:tool:${String(toolCallId)}`;
 }
@@ -248,7 +245,6 @@ function subagentItemId(identity: SessionIdentity, toolCallId: unknown): string 
  */
 function isBoardVisible(item: MonitorItem, state: MonitorState, now: number): boolean {
 	if (item.id.startsWith(LIVE_SESSION_PREFIX)) return isLiveSessionFresh(item, state, now);
-	if (item.id.endsWith(QUEUED_ITEM_SUFFIX)) return now - item.updatedAt <= LIVE_QUEUED_TTL_MS;
 	if (item.kind === "subagent") return now - item.updatedAt <= SUBAGENT_ITEM_TTL_MS;
 	return false;
 }
@@ -307,36 +303,6 @@ function markItemCompleted(state: MonitorState, identity: SessionIdentity, itemI
 	touchSession(state, identity);
 }
 
-function removeQueuedItems(state: MonitorState, identity: SessionIdentity): void {
-	const currentId = queuedItemId(identity);
-	const legacyPrefix = `${currentId}:`;
-	for (const itemId of Object.keys(state.items)) {
-		if (itemId === currentId || itemId.startsWith(legacyPrefix)) delete state.items[itemId];
-	}
-}
-
-function syncQueuedItem(state: MonitorState, identity: SessionIdentity, hasPending: boolean): void {
-	if (!hasPending) {
-		removeQueuedItems(state, identity);
-		return;
-	}
-	const itemId = queuedItemId(identity);
-	const existing = state.items[itemId];
-	if (existing) {
-		state.items[itemId] = { ...existing, updatedAt: Date.now() };
-		touchSession(state, identity);
-		return;
-	}
-	putItem(state, identity, {
-		id: itemId,
-		kind: "agent",
-		status: "queued",
-		title: "Queued message",
-		startedAt: Date.now(),
-		details: "Pi has pending steer or follow-up messages",
-	});
-}
-
 // --- pi context adapters -----------------------------------------------------
 
 function getSessionIdentity(ctx: any): SessionIdentity {
@@ -347,10 +313,6 @@ function getSessionIdentity(ctx: any): SessionIdentity {
 		sessionFile: sessionManager?.getSessionFile?.(),
 		cwd: sessionManager?.getCwd?.() ?? ctx.cwd ?? process.cwd(),
 	};
-}
-
-function hasPendingMessages(ctx: unknown): boolean {
-	return (ctx as { hasPendingMessages?: () => boolean } | null)?.hasPendingMessages?.() === true;
 }
 
 /** Matches the tools registered by the pi-subagents extension ("subagent", "subagent_wait"). */
@@ -434,12 +396,13 @@ function textNeedsInput(text: string): boolean {
 // --- board assembly ----------------------------------------------------------
 
 function emptyColumns(): BoardColumns {
-	return { queued: [], in_progress: [], idle: [], blocked: [], completed: [] };
+	return { blocked: [], in_progress: [], idle: [], completed: [] };
 }
 
-/** An alive session between turns gets its own column; everything else follows its stored status. */
+/** An alive session between turns gets its own column; a pending message sits with the turn it is waiting on. */
 function boardColumnFor(item: BoardItem): BoardColumn {
-	return item.idle ? "idle" : item.status;
+	if (item.idle) return "idle";
+	return item.status === "queued" ? "in_progress" : item.status;
 }
 
 function statusColumns(state: MonitorState, sessionItems: MonitorItem[]): BoardColumns {
@@ -785,7 +748,7 @@ class MonitorDashboard {
 	private interval: ReturnType<typeof setInterval> | undefined;
 	private selectedColumn = 0;
 	private selectedRow = 0;
-	private rowOffsets: Record<BoardColumn, number> = { queued: 0, in_progress: 0, idle: 0, blocked: 0, completed: 0 };
+	private rowOffsets: Record<BoardColumn, number> = { blocked: 0, in_progress: 0, idle: 0, completed: 0 };
 	private expanded = false;
 	private state = readState();
 	private scan = scanPiSessions();
@@ -832,17 +795,15 @@ class MonitorDashboard {
 		const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
 		const bold = (s: string) => `\x1b[1m${s}\x1b[22m`;
 		const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
-		const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 		const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 		const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 		const blue = (s: string) => `\x1b[34m${s}\x1b[0m`;
 		const reverse = (s: string) => `\x1b[7m${s}\x1b[27m`;
 
 		const columnStyles: Record<BoardColumn, { label: string; color: (s: string) => string }> = {
-			queued: { label: "Queued", color: yellow },
-			in_progress: { label: "In Progress", color: cyan },
+			blocked: { label: "Needs Input", color: red },
+			in_progress: { label: "Working", color: cyan },
 			idle: { label: "Idle", color: blue },
-			blocked: { label: "Blocked", color: red },
 			completed: { label: "Completed", color: green },
 		};
 		const columns = this.columns;
@@ -977,7 +938,6 @@ export default function (pi: ExtensionAPI) {
 		const identity = getSessionIdentity(ctx);
 		withState((state) => {
 			touchSession(state, identity);
-			removeQueuedItems(state, identity);
 			publishLiveRow(state, identity, {
 				title: sessionName,
 				status: "completed",
@@ -987,11 +947,9 @@ export default function (pi: ExtensionAPI) {
 
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = setInterval(() => {
-			const pending = hasPendingMessages(ctx);
 			withState((state) => {
 				touchSession(state, identity);
 				if (liveRow && !state.items[liveSessionItemId(identity)]) putLiveSessionItem(state, identity, liveRow);
-				syncQueuedItem(state, identity, pending);
 			});
 		}, HEARTBEAT_MS);
 	});
@@ -1017,27 +975,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("input", async (event, ctx) => {
 		nameSessionFromPrompt(pi, ctx, event.text);
-		if (!event.streamingBehavior) return;
-		const identity = getSessionIdentity(ctx);
-		const title = textFromInput(event.text) || `${event.streamingBehavior} message`;
-		withState((state) => {
-			removeQueuedItems(state, identity);
-			putItem(state, identity, {
-				id: queuedItemId(identity),
-				kind: "agent",
-				status: "queued",
-				title,
-				startedAt: Date.now(),
-				details: `Queued ${event.streamingBehavior} message`,
-			});
-		});
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
 		const identity = getSessionIdentity(ctx);
 		const title = currentSessionName(pi, ctx);
 		withState((state) => {
-			removeQueuedItems(state, identity);
 			publishLiveRow(state, identity, {
 				title,
 				status: "in_progress",
@@ -1046,19 +989,11 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	pi.on("turn_start", async (_event, ctx) => {
-		const identity = getSessionIdentity(ctx);
-		const pending = hasPendingMessages(ctx);
-		withState((state) => syncQueuedItem(state, identity, pending));
-	});
-
 	pi.on("agent_end", async (event, ctx) => {
 		const identity = getSessionIdentity(ctx);
-		const pending = hasPendingMessages(ctx);
 		const status = inferLiveSessionStatus(event.messages);
 		const title = currentSessionName(pi, ctx);
 		withState((state) => {
-			syncQueuedItem(state, identity, pending);
 			publishLiveRow(state, identity, {
 				title,
 				status,
@@ -1115,7 +1050,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("monitor", {
-		description: "Show a board of queued, in-progress, idle, blocked, and completed pi work across sessions",
+		description: "Show a board of pi sessions needing input, working, idle, and completed",
 		handler: async (_args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("Monitor requires interactive TUI mode", "error");
