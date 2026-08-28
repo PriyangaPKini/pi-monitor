@@ -691,10 +691,9 @@ function formatAge(timestamp?: number): string {
 	return `${hours}h`;
 }
 
+/** Just the name: appending the last activity made titles churn on every turn and ate the column. */
 function formatPiSessionTitle(summary: PiSessionSummary): string {
-	const name = summary.name || summary.firstUserPrompt || "pi session";
-	const activity = summary.lastAssistantText || summary.lastUserPrompt || "session active";
-	return `${oneLineSummary(name)} — ${oneLineSummary(activity)}`;
+	return limitWords(oneLineSummary(summary.name || summary.firstUserPrompt || "pi session"), 8);
 }
 
 function formatPiSessionDetails(summary: PiSessionSummary, sessionFile: string): string {
