@@ -366,8 +366,16 @@ function compactName(text: string): string {
 }
 
 function inferLiveSessionStatus(messages: unknown): MonitorStatus {
-	const text = textFromMessages(messages).toLowerCase();
-	return textNeedsInput(text) ? "blocked" : "completed";
+	const text = textFromMessages(messages);
+	return endsOnAQuestion(text) || textNeedsInput(text.toLowerCase()) ? "blocked" : "completed";
+}
+
+/**
+ * A turn that ends on a question is waiting on an answer. The phrase list below misses
+ * the plainest way to ask one ("Should I continue?"), so check the punctuation first.
+ */
+function endsOnAQuestion(text: string): boolean {
+	return text.trimEnd().endsWith("?");
 }
 
 function textFromMessages(messages: unknown): string {
