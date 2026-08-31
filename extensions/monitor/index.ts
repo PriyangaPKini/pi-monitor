@@ -316,6 +316,11 @@ function getSessionIdentity(ctx: any): SessionIdentity {
 }
 
 /** Matches the tools registered by the pi-subagents extension ("subagent", "subagent_wait"). */
+/** pi's own view of whether this session is streaming right now (ExtensionContext.isIdle). */
+function isAgentWorking(ctx: unknown): boolean {
+	return (ctx as { isIdle?: () => boolean } | null)?.isIdle?.() === false;
+}
+
 function isSubagentTool(toolName: unknown): boolean {
 	return String(toolName ?? "").includes("subagent");
 }
@@ -954,9 +959,22 @@ export default function (pi: ExtensionAPI) {
 
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = setInterval(() => {
+			const working = isAgentWorking(ctx);
 			withState((state) => {
 				touchSession(state, identity);
-				if (liveRow && !state.items[liveSessionItemId(identity)]) putLiveSessionItem(state, identity, liveRow);
+				const row = state.items[liveSessionItemId(identity)];
+				if (!row) {
+					if (liveRow) putLiveSessionItem(state, identity, liveRow);
+					return;
+				}
+				// agent_end is not guaranteed after retries or compaction, so reconcile the
+				// row against what pi says the session is actually doing. Blocked is a kind
+				// of idle, so an idle session that asked a question keeps its Needs Input row.
+				if (working && row.status !== "in_progress") {
+					publishLiveRow(state, identity, { title: row.title, status: "in_progress", details: "Pi agent is processing a prompt" });
+				} else if (!working && row.status === "in_progress") {
+					publishLiveRow(state, identity, { title: row.title, status: "completed", details: "Pi agent is idle and ready for input" });
+				}
 			});
 		}, HEARTBEAT_MS);
 	});
